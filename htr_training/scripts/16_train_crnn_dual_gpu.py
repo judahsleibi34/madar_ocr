@@ -120,9 +120,15 @@ def calculate_ctc_loss(
         dtype=torch.float16,
         enabled=use_amp,
     ):
+        # logits: (N, T, C) -- batch-first. This is what CRNN.forward now
+        # returns, and it's required for nn.DataParallel to correctly
+        # split/gather across GPUs (DataParallel always assumes dim 0 is
+        # the batch dimension).
         logits = model(images)
 
-    log_probs = F.log_softmax(logits.float(), dim=2)
+    # nn.CTCLoss expects log_probs as (T, N, C) by default, so permute
+    # AFTER the model call / DataParallel gather, not inside the model.
+    log_probs = F.log_softmax(logits.float(), dim=2).permute(1, 0, 2)
     input_lengths = raw_model.calculate_input_lengths(image_widths)
 
     if torch.any(target_lengths > input_lengths):
@@ -223,7 +229,10 @@ def validate(
             total_loss += loss.item()
             valid_batches += 1
 
-        predictions = logits.argmax(dim=2).permute(1, 0)
+        # logits is (N, T, C) (batch-first, as returned by the model /
+        # gathered by DataParallel), so argmax over the class dim (2)
+        # already yields (N, T) -- no further permute needed.
+        predictions = logits.argmax(dim=2)
         hypotheses = encoder.decode_batch(predictions)
 
         all_hypotheses.extend(hypotheses)

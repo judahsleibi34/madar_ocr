@@ -73,13 +73,17 @@ class CRNN(nn.Module):
                 f"{features.shape[2]}. Expected input height is 64."
             )
 
-        features = features.squeeze(2)
-        features = features.permute(0, 2, 1)
+        features = features.squeeze(2)          # (N, C, W)
+        features = features.permute(0, 2, 1)     # (N, W, C) -> (N, T, C)
 
         recurrent_features, _ = self.lstm(features)
         logits = self.projection(recurrent_features)
 
-        return logits.permute(1, 0, 2)
+        # IMPORTANT: keep batch-first (N, T, C) here.
+        # DataParallel splits/gathers along dim 0, which must be the batch
+        # dimension. Do the (T, N, C) permute for ctc_loss *outside* the
+        # model, after DataParallel has already gathered the replicas.
+        return logits
 
     def calculate_input_lengths(self, image_widths: torch.Tensor) -> torch.Tensor:
         return torch.div(
