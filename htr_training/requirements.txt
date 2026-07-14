@@ -12,3 +12,4 @@ scikit-learn
 matplotlib
 tqdm
 kaggle
+python-bidi   
