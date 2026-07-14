@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 
 import torch
+from bidi.algorithm import get_display
 
 
 class CTCTextEncoder:
@@ -25,8 +26,10 @@ class CTCTextEncoder:
         self.num_classes = int(vocabulary["num_classes"])
 
     def encode(self, text: str) -> torch.Tensor:
+        visual_text = get_display(text)
+
         indices = []
-        for character in text:
+        for character in visual_text:
             if character not in self.char_to_index:
                 raise ValueError(f"Unknown character {character!r}")
             indices.append(self.char_to_index[character])
@@ -58,8 +61,7 @@ class CTCTextEncoder:
         return "".join(characters)
 
     def decode_batch(self, batch_indices: torch.Tensor) -> list[str]:
-        """
-        Decodes a full batch of greedy predictions.
-        Expects shape [batch, time] (already argmax'd over classes).
-        """
         return [self.decode(row) for row in batch_indices]
+
+    def to_visual(self, text: str) -> str:
+        return get_display(text)

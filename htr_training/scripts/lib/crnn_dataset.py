@@ -12,6 +12,8 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.transforms import functional as TF
 
+from lib.ctc_text_encoder import CTCTextEncoder
+
 
 class CRNNDataset(Dataset):
     """
@@ -73,20 +75,15 @@ class CRNNDataset(Dataset):
             subset=["image", "text"]
         ).reset_index(drop=True)
 
-        with self.vocab_path.open(
-            "r",
-            encoding="utf-8",
-        ) as file:
-            vocabulary = json.load(file)
+        # Single source of truth for text <-> index encoding, including
+        # RTL-aware reversal for Arabic text. Both training-time encoding
+        # (here) and validation-time decoding (in the training script) go
+        # through this same object, so the visual left-to-right ordering
+        # stays consistent everywhere.
+        self.text_encoder = CTCTextEncoder(self.vocab_path)
 
-        self.char_to_index: dict[str, int] = {
-            character: int(index)
-            for character, index
-            in vocabulary["char_to_index"].items()
-        }
-
-        self.blank_index = int(vocabulary["blank_index"])
-        self.num_classes = int(vocabulary["num_classes"])
+        self.blank_index = self.text_encoder.blank_index
+        self.num_classes = self.text_encoder.num_classes
 
     def __len__(self) -> int:
         return len(self.dataframe)
@@ -98,17 +95,7 @@ class CRNNDataset(Dataset):
         return unicodedata.normalize("NFC", text).strip()
 
     def encode_text(self, text: str) -> torch.Tensor:
-        indices: list[int] = []
-
-        for character in text:
-            if character not in self.char_to_index:
-                raise ValueError(
-                    f"Character {character!r} is not in the vocabulary."
-                )
-
-            indices.append(self.char_to_index[character])
-
-        return torch.tensor(indices, dtype=torch.long)
+        return self.text_encoder.encode(text)
 
     def resize_image(self, image: Image.Image) -> Image.Image:
         original_width, original_height = image.size
