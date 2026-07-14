@@ -1,0 +1,7 @@
+﻿data/
+outputs/
+scripts/__pycache__/
+scripts/lib/__pycache__/
+*.pyc
+*.widths.npy
+patch*.py
