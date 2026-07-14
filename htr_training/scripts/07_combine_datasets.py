@@ -3,7 +3,7 @@ from pathlib import Path
 
 base = Path("data/processed")
 
-datasets = ["iam", "khatt", "arabic", "muharaf"]
+datasets = ["iam", "khatt", "muharaf"]
 
 for split in ["train", "validation"]:
     frames = []

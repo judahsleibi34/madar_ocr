@@ -1,6 +1,8 @@
 from pathlib import Path
 import csv
 
+from PIL import Image
+
 
 ROOT = Path("data/raw/khatt")
 OUTPUT = Path("data/processed/khatt")
@@ -29,11 +31,18 @@ def build_manifest(
 ) -> None:
     rows = []
 
-    for image_path in sorted(input_dir.rglob("*.tif")):
-        text_path = image_path.with_suffix(".txt")
+    image_dir = OUTPUT / "images" / split_name
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    tif_paths = sorted(input_dir.rglob("*.tif"))
+
+    output_index = 0
+
+    for tif_path in tif_paths:
+        text_path = tif_path.with_suffix(".txt")
 
         if not text_path.exists():
-            print(f"Missing transcription: {image_path}")
+            print(f"Missing transcription: {tif_path}")
             continue
 
         text = read_text_file(text_path)
@@ -41,6 +50,15 @@ def build_manifest(
         if not text:
             print(f"Empty transcription: {text_path}")
             continue
+
+        try:
+            image = Image.open(tif_path).convert("RGB")
+        except Exception as exc:
+            print(f"Could not open image: {tif_path} ({exc})")
+            continue
+
+        image_path = image_dir / f"{split_name}_{output_index:06d}.png"
+        image.save(image_path)
 
         rows.append(
             {
@@ -51,6 +69,11 @@ def build_manifest(
                 "split": split_name,
             }
         )
+
+        output_index += 1
+
+        if output_index % 500 == 0:
+            print(f"{split_name}: exported {output_index} images")
 
     output_file = OUTPUT / f"{split_name}.csv"
 
