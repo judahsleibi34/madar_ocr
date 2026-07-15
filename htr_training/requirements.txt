@@ -1,15 +1,30 @@
+# Core deep learning
 torch
 torchvision
+
+# Hugging Face
 transformers
 datasets
 accelerate
 evaluate
+huggingface-hub
+hf-xet
+pyarrow
+
+# OCR evaluation and text handling
 jiwer
-pillow
+python-bidi
+
+# Image and data processing
+Pillow
 pandas
 numpy
 scikit-learn
+
+# Visualization and progress
 matplotlib
 tqdm
+
+# Dataset downloads and Kaggle integration
 kaggle
-python-bidi   
+gdown
