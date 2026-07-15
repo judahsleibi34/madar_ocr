@@ -21,7 +21,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 def load_base_module():
     script_dir = Path(__file__).resolve().parent
-    path = script_dir / "16_train_crnn_dual_gpu.py"
+    path = script_dir / "36_legacy_train_crnn_dual_gpu.py"
 
     spec = importlib.util.spec_from_file_location(
         "base_crnn_training",
@@ -369,7 +369,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--vocab",
-        default="data/processed/vocab.json",
+        default="data/processed/master_safe/vocab.json",
     )
 
     parser.add_argument(

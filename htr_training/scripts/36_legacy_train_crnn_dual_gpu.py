@@ -30,7 +30,7 @@ import importlib.util as _importlib_util
 
 
 def _load_plot_module():
-    plot_path = Path(__file__).resolve().parent / "16_plot_metrics.py"
+    plot_path = Path(__file__).resolve().parent / "24_plot_metrics.py"
     spec = _importlib_util.spec_from_file_location("plot_metrics_module", plot_path)
     module = _importlib_util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -74,7 +74,31 @@ def create_loader(
         max_image_width=max_image_width,
     )
 
-    cache_path = manifest_path.with_suffix(".widths.npy")
+    # Kaggle input datasets are read-only, so width caches must
+    # be written under /kaggle/working rather than beside the
+    # manifest in /kaggle/input.
+    cache_root = (
+        Path("/kaggle/working/width_cache")
+        if Path("/kaggle/working").exists()
+        else Path("outputs/width_cache")
+    )
+
+    cache_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    manifest_signature = (
+        f"{manifest_path.stem}_"
+        f"{manifest_path.stat().st_size}_"
+        f"h{image_height}_"
+        f"w{max_image_width}"
+    )
+
+    cache_path = (
+        cache_root
+        / f"{manifest_signature}.npy"
+    )
 
     widths = compute_effective_widths(
         dataframe=dataset.dataframe,
@@ -140,6 +164,42 @@ def calculate_ctc_loss(
     return loss, logits
 
 
+
+def apply_optimizer_step(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    gradient_clip: float,
+    gradient_multiplier: float = 1.0,
+) -> None:
+    """
+    Apply one optimizer step after gradient accumulation.
+
+    gradient_multiplier corrects the final partial accumulation
+    group when it contains fewer batches than accumulation_steps.
+    """
+    scaler.unscale_(optimizer)
+
+    if gradient_multiplier != 1.0:
+        for parameter in model.parameters():
+            if parameter.grad is not None:
+                parameter.grad.mul_(
+                    gradient_multiplier
+                )
+
+    torch.nn.utils.clip_grad_norm_(
+        model.parameters(),
+        max_norm=gradient_clip,
+    )
+
+    scaler.step(optimizer)
+    scaler.update()
+
+    optimizer.zero_grad(
+        set_to_none=True
+    )
+
+
 def train_one_epoch(
     model: nn.Module,
     raw_model: nn.Module,
@@ -153,13 +213,20 @@ def train_one_epoch(
     log_every: int,
     accumulation_steps: int,
 ) -> float:
+    if accumulation_steps < 1:
+        raise ValueError(
+            "accumulation_steps must be at least 1."
+        )
+
     model.train()
 
     total_loss = 0.0
     valid_batches = 0
-    start_time = time.time()
+    pending_batches = 0
 
-    optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad(
+        set_to_none=True
+    )
 
     progress_bar = tqdm(
         enumerate(loader, start=1),
@@ -170,32 +237,82 @@ def train_one_epoch(
 
     for batch_index, batch in progress_bar:
         loss, _ = calculate_ctc_loss(
-            model=model, raw_model=raw_model, criterion=criterion, batch=batch,
-            device=device, use_amp=use_amp,
+            model=model,
+            raw_model=raw_model,
+            criterion=criterion,
+            batch=batch,
+            device=device,
+            use_amp=use_amp,
         )
 
         if not torch.isfinite(loss):
-            print(f"Skipping non-finite loss at batch {batch_index}: {loss.item()}")
+            print(
+                "Skipping non-finite loss at "
+                f"batch {batch_index}: "
+                f"{loss.item()}"
+            )
             continue
 
-        scaler.scale(loss / accumulation_steps).backward()
+        scaled_loss = (
+            loss / accumulation_steps
+        )
 
-        if batch_index % accumulation_steps == 0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=gradient_clip)
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad(set_to_none=True)
+        scaler.scale(
+            scaled_loss
+        ).backward()
 
-        total_loss += loss.item()
+        pending_batches += 1
         valid_batches += 1
+        total_loss += loss.item()
 
-        if valid_batches > 0:
-            average_loss = total_loss / valid_batches
-            progress_bar.set_postfix(loss=f"{average_loss:.4f}")
+        if pending_batches == accumulation_steps:
+            apply_optimizer_step(
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                gradient_clip=gradient_clip,
+            )
+
+            pending_batches = 0
+
+        average_loss = (
+            total_loss / valid_batches
+        )
+
+        progress_bar.set_postfix(
+            loss=f"{average_loss:.4f}"
+        )
+
+        if (
+            log_every > 0
+            and batch_index % log_every == 0
+        ):
+            print(
+                f"Batch {batch_index}/{len(loader)} "
+                f"average loss: {average_loss:.4f}"
+            )
 
     if valid_batches == 0:
-        raise RuntimeError("No valid training batches were completed.")
+        raise RuntimeError(
+            "No valid training batches were completed."
+        )
+
+    # Flush the final partial accumulation group.
+    if pending_batches > 0:
+        gradient_multiplier = (
+            accumulation_steps
+            / pending_batches
+        )
+
+        apply_optimizer_step(
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            gradient_clip=gradient_clip,
+            gradient_multiplier=(
+                gradient_multiplier
+            ),
+        )
 
     return total_loss / valid_batches
 
