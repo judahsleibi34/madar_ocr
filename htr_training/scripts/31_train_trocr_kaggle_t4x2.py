@@ -236,6 +236,7 @@ def configure_model(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Kaggle T4 x2 TrOCR training")
     parser.add_argument("--data-archive", type=Path, default=None)
+    parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--epochs", type=float, default=3.0)
@@ -259,8 +260,21 @@ def main() -> None:
     args = parse_args()
     seed_everything(args.seed)
 
-    archive = locate_archive(args.data_archive)
-    data_root = extract_dataset(archive)
+    if args.data_dir is not None:
+        data_dir = args.data_dir.resolve()
+
+        if not data_dir.exists():
+            raise FileNotFoundError(data_dir)
+
+    else:
+        archive = locate_archive(
+            args.data_archive
+        )
+        data_dir = extract_archive(
+            archive,
+            Path("/kaggle/working/ihwwr_trocr_data"),
+        )
+
     train_manifest = data_root / "train_model.csv"
     val_manifest = data_root / "val.csv"
     if not train_manifest.exists() or not val_manifest.exists():
