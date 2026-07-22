@@ -289,7 +289,10 @@ def main() -> None:
     say("Kaggle TrOCR training")
     say(f"Visible GPUs: {torch.cuda.device_count()}")
     say(f"DDP world size: {world_size}")
-    say(f"Archive: {archive}")
+    if args.data_dir is not None:
+        say(f"Data root: {data_root}")
+    else:
+        say(f"Archive: {archive}")
     say(f"Output: {output}")
     if world_size != 2:
         say("WARNING: launch with torchrun --nproc_per_node=2 to use both T4 GPUs.")
