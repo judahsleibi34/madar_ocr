@@ -261,16 +261,16 @@ def main() -> None:
     seed_everything(args.seed)
 
     if args.data_dir is not None:
-        data_dir = args.data_dir.resolve()
+        data_root = args.data_dir.resolve()
 
-        if not data_dir.exists():
-            raise FileNotFoundError(data_dir)
+        if not data_root.exists():
+            raise FileNotFoundError(data_root)
 
     else:
         archive = locate_archive(
             args.data_archive
         )
-        data_dir = extract_archive(
+        data_root = extract_archive(
             archive,
             Path("/kaggle/working/ihwwr_trocr_data"),
         )
