@@ -362,7 +362,7 @@ def main() -> None:
         optim="adamw_torch",
         max_grad_norm=1.0,
         report_to=["tensorboard"],
-        ddp_find_unused_parameters=False,
+        ddp_find_unused_parameters=True,
         seed=args.seed,
         data_seed=args.seed,
     )
