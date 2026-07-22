@@ -1,0 +1,19 @@
+﻿Archived project:
+CRNN bilingual OCR model and experiment code
+
+Archived on:
+2026-07-19 16:26:07
+
+Preserved trained baseline:
+outputs\baselines\crnn_bilingual_v1\model.pt
+outputs\baselines\crnn_bilingual_v1\char_ngram_models.pkl
+outputs\baselines\crnn_bilingual_v1\vocab.json
+outputs\baselines\crnn_bilingual_v1\test_result.json
+
+Preserved original checkpoint:
+outputs\checkpoints\bilingual_v4_master_ctc\best_cer.pt
+
+Preserved manifests:
+data\processed\master_ctc\train_all.csv
+data\processed\master_ctc\val_all.csv
+data\processed\master_ctc\test_all.csv

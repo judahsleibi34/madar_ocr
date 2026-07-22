@@ -1,7 +1,18 @@
-﻿data/
+data/
 outputs/
 scripts/__pycache__/
 scripts/lib/__pycache__/
 *.pyc
 *.widths.npy
 patch*.py
+
+# Local machine-learning caches
+htr_training/.cache/
+htr_training/huggingface_cache/
+htr_training/.huggingface/
+**/__pycache__/
+*.pyo
+.pytest_cache/
+.mypy_cache/
+# Kaggle datasets and generated training files
+htr_training/kaggle_upload/

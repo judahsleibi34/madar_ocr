@@ -1,0 +1,1038 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+from PIL import Image
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Analyze image-width capping, horizontal compression, "
+            "pixels per character, and CTC sequence capacity."
+        )
+    )
+
+    parser.add_argument(
+        "--analysis-csv",
+        default=(
+            "outputs/error_analysis_full_validation/"
+            "analysis_rows.csv"
+        ),
+    )
+
+    parser.add_argument(
+        "--output-dir",
+        default="outputs/width_compression_analysis",
+    )
+
+    parser.add_argument(
+        "--image-height",
+        type=int,
+        default=64,
+    )
+
+    parser.add_argument(
+        "--max-image-width",
+        type=int,
+        default=2560,
+    )
+
+    parser.add_argument(
+        "--width-reduction-factor",
+        type=int,
+        default=4,
+    )
+
+    return parser.parse_args()
+
+
+def to_bool(value: Any) -> bool:
+    return str(value).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+
+
+def safe_divide(
+    numerator: float,
+    denominator: float,
+) -> float:
+    if denominator <= 0:
+        return 0.0
+
+    return float(numerator / denominator)
+
+
+def aggregate(
+    group: pd.DataFrame,
+) -> dict[str, Any]:
+    reference_characters = int(
+        group["reference_characters"].sum()
+    )
+
+    reference_words = int(
+        group["reference_words"].sum()
+    )
+
+    character_edits = int(
+        group["best_character_edits"].sum()
+    )
+
+    word_edits = int(
+        group["best_word_edits"].sum()
+    )
+
+    return {
+        "count": int(len(group)),
+        "capped_count": int(
+            group["was_capped"].sum()
+        ),
+        "capped_percent": float(
+            group["was_capped"].mean() * 100
+        ),
+        "cer": safe_divide(
+            character_edits,
+            reference_characters,
+        ),
+        "wer": safe_divide(
+            word_edits,
+            reference_words,
+        ),
+        "exact_accuracy": float(
+            group["best_exact_match"].mean()
+        ),
+        "mean_original_width": float(
+            group["original_width"].mean()
+        ),
+        "mean_uncapped_resized_width": float(
+            group[
+                "uncapped_resized_width"
+            ].mean()
+        ),
+        "mean_processed_width": float(
+            group["processed_width"].mean()
+        ),
+        "mean_processed_pixels_per_char": float(
+            group[
+                "processed_pixels_per_char"
+            ].mean()
+        ),
+        "median_processed_pixels_per_char": float(
+            group[
+                "processed_pixels_per_char"
+            ].median()
+        ),
+        "mean_time_steps_per_char": float(
+            group[
+                "time_steps_per_char"
+            ].mean()
+        ),
+        "ctc_infeasible_count": int(
+            group["ctc_infeasible"].sum()
+        ),
+        "low_ctc_margin_count": int(
+            (group["ctc_margin"] < 10).sum()
+        ),
+    }
+
+
+def grouped_metrics(
+    dataframe: pd.DataFrame,
+    column: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    for value, group in dataframe.groupby(
+        column,
+        dropna=False,
+        observed=False,
+    ):
+        row = aggregate(group)
+        row[column] = str(value)
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    first_columns = [
+        column,
+        "count",
+        "capped_count",
+        "capped_percent",
+        "cer",
+        "wer",
+        "exact_accuracy",
+    ]
+
+    remaining_columns = [
+        key
+        for key in rows[0]
+        if key not in first_columns
+    ]
+
+    return pd.DataFrame(rows)[
+        first_columns + remaining_columns
+    ]
+
+
+def create_plots(
+    dataframe: pd.DataFrame,
+    output_directory: Path,
+    cap_metrics: pd.DataFrame,
+    dataset_metrics: pd.DataFrame,
+    ppc_metrics: pd.DataFrame,
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+
+    except ImportError:
+        print(
+            "Matplotlib is not installed. "
+            "CSV reports were still created."
+        )
+        return
+
+    plot_directory = (
+        output_directory / "plots"
+    )
+
+    plot_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    cap_plot = cap_metrics.copy()
+
+    cap_plot["cap_status"] = (
+        cap_plot["cap_status"].replace(
+            {
+                "False": "Not capped",
+                "True": "Capped",
+            }
+        )
+    )
+
+    axis = (
+        cap_plot
+        .set_index("cap_status")[
+            ["cer", "wer"]
+        ]
+        .mul(100)
+        .plot(
+            kind="bar",
+            figsize=(8, 6),
+        )
+    )
+
+    axis.set_title(
+        "Error rate for capped and uncapped images"
+    )
+
+    axis.set_xlabel("Width status")
+    axis.set_ylabel("Error rate (%)")
+
+    axis.tick_params(
+        axis="x",
+        rotation=0,
+    )
+
+    axis.figure.tight_layout()
+
+    axis.figure.savefig(
+        plot_directory
+        / "capped_vs_uncapped_error.png",
+        dpi=180,
+    )
+
+    plt.close(axis.figure)
+
+    dataset_plot = (
+        dataset_metrics
+        .sort_values(
+            "capped_percent",
+            ascending=True,
+        )
+        .set_index("dataset")[
+            "capped_percent"
+        ]
+    )
+
+    axis = dataset_plot.plot(
+        kind="barh",
+        figsize=(10, 7),
+    )
+
+    axis.set_title(
+        "Images capped at maximum width by dataset"
+    )
+
+    axis.set_xlabel("Capped images (%)")
+    axis.set_ylabel("Dataset")
+
+    axis.figure.tight_layout()
+
+    axis.figure.savefig(
+        plot_directory
+        / "cap_rate_by_dataset.png",
+        dpi=180,
+    )
+
+    plt.close(axis.figure)
+
+    if not ppc_metrics.empty:
+        ppc_plot = (
+            ppc_metrics
+            .set_index(
+                "pixels_per_char_bucket"
+            )["wer"]
+            .mul(100)
+        )
+
+        axis = ppc_plot.plot(
+            kind="bar",
+            figsize=(10, 6),
+        )
+
+        axis.set_title(
+            "WER by processed pixels "
+            "per reference character"
+        )
+
+        axis.set_xlabel(
+            "Processed pixels per character"
+        )
+
+        axis.set_ylabel("WER (%)")
+
+        axis.tick_params(
+            axis="x",
+            rotation=25,
+        )
+
+        axis.figure.tight_layout()
+
+        axis.figure.savefig(
+            plot_directory
+            / "wer_by_pixels_per_character.png",
+            dpi=180,
+        )
+
+        plt.close(axis.figure)
+
+    sample = dataframe
+
+    if len(sample) > 3000:
+        sample = sample.sample(
+            n=3000,
+            random_state=42,
+        )
+
+    axis = sample.plot.scatter(
+        x="processed_pixels_per_char",
+        y="best_cer",
+        figsize=(9, 6),
+        alpha=0.25,
+    )
+
+    axis.set_title(
+        "Sample CER versus processed "
+        "pixels per character"
+    )
+
+    axis.set_xlabel(
+        "Processed pixels per reference character"
+    )
+
+    axis.set_ylabel("Sample CER")
+
+    axis.figure.tight_layout()
+
+    axis.figure.savefig(
+        plot_directory
+        / "cer_vs_pixels_per_character.png",
+        dpi=180,
+    )
+
+    plt.close(axis.figure)
+
+
+def main() -> None:
+    args = parse_args()
+
+    analysis_path = Path(
+        args.analysis_csv
+    ).expanduser().resolve()
+
+    output_directory = Path(
+        args.output_dir
+    ).expanduser().resolve()
+
+    if not analysis_path.exists():
+        raise FileNotFoundError(
+            f"Analysis CSV not found: "
+            f"{analysis_path}"
+        )
+
+    if args.image_height <= 0:
+        raise ValueError(
+            "--image-height must be positive."
+        )
+
+    if args.max_image_width <= 0:
+        raise ValueError(
+            "--max-image-width must be positive."
+        )
+
+    if args.width_reduction_factor <= 0:
+        raise ValueError(
+            "--width-reduction-factor "
+            "must be positive."
+        )
+
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    dataframe = pd.read_csv(
+        analysis_path,
+        dtype=str,
+        keep_default_na=False,
+    )
+
+    required_columns = {
+        "image_path",
+        "dataset",
+        "language",
+        "reference_visual",
+        "reference_characters",
+        "reference_words",
+        "best_character_edits",
+        "best_word_edits",
+        "best_cer",
+        "best_wer",
+        "best_exact_match",
+    }
+
+    missing_columns = (
+        required_columns
+        - set(dataframe.columns)
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Missing required columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+    numeric_columns = [
+        "reference_characters",
+        "reference_words",
+        "best_character_edits",
+        "best_word_edits",
+        "best_cer",
+        "best_wer",
+    ]
+
+    for column in numeric_columns:
+        dataframe[column] = pd.to_numeric(
+            dataframe[column],
+            errors="raise",
+        )
+
+    dataframe["best_exact_match"] = (
+        dataframe[
+            "best_exact_match"
+        ].map(to_bool)
+    )
+
+    rows: list[dict[str, Any]] = []
+
+    missing_rows: list[
+        dict[str, str]
+    ] = []
+
+    total_rows = len(dataframe)
+
+    for row_number, row in enumerate(
+        dataframe.to_dict("records"),
+        start=1,
+    ):
+        image_path = Path(
+            str(row["image_path"])
+        ).expanduser()
+
+        if not image_path.is_absolute():
+            image_path = (
+                Path.cwd()
+                / image_path
+            ).resolve()
+
+        try:
+            with Image.open(
+                image_path
+            ) as image:
+                (
+                    original_width,
+                    original_height,
+                ) = image.size
+
+        except Exception as error:
+            missing_rows.append(
+                {
+                    "image_path": str(
+                        image_path
+                    ),
+                    "error": str(error),
+                }
+            )
+
+            continue
+
+        if original_width <= 0 or original_height <= 0:
+            missing_rows.append(
+                {
+                    "image_path": str(image_path),
+                    "error": (
+                        f"Invalid image size: "
+                        f"{(original_width, original_height)}"
+                    ),
+                }
+            )
+
+            continue
+
+        uncapped_resized_width = max(
+            1,
+            round(
+                original_width
+                * args.image_height
+                / original_height
+            ),
+        )
+
+        processed_width = min(
+            uncapped_resized_width,
+            args.max_image_width,
+        )
+
+        was_capped = (
+            uncapped_resized_width
+            > args.max_image_width
+        )
+
+        horizontal_scale_after_cap = (
+            safe_divide(
+                processed_width,
+                uncapped_resized_width,
+            )
+        )
+
+        if was_capped:
+            horizontal_compression_percent = (
+                1.0
+                - horizontal_scale_after_cap
+            ) * 100.0
+        else:
+            horizontal_compression_percent = 0.0
+
+        reference = str(
+            row["reference_visual"]
+        )
+
+        reference_character_count = int(
+            row["reference_characters"]
+        )
+
+        adjacent_repeats = sum(
+            reference[index]
+            == reference[index - 1]
+            for index in range(
+                1,
+                len(reference),
+            )
+        )
+
+        minimum_ctc_steps = (
+            reference_character_count
+            + adjacent_repeats
+        )
+
+        model_time_steps = max(
+            1,
+            processed_width
+            // args.width_reduction_factor,
+        )
+
+        ctc_margin = (
+            model_time_steps
+            - minimum_ctc_steps
+        )
+
+        output_row = dict(row)
+
+        output_row.update(
+            {
+                "resolved_image_path": str(
+                    image_path
+                ),
+                "original_width": (
+                    original_width
+                ),
+                "original_height": (
+                    original_height
+                ),
+                "original_aspect_ratio": (
+                    safe_divide(
+                        original_width,
+                        original_height,
+                    )
+                ),
+                "uncapped_resized_width": (
+                    uncapped_resized_width
+                ),
+                "processed_width": (
+                    processed_width
+                ),
+                "was_capped": was_capped,
+                "horizontal_scale_after_cap": (
+                    horizontal_scale_after_cap
+                ),
+                "horizontal_compression_percent": (
+                    horizontal_compression_percent
+                ),
+                "original_pixels_per_char": (
+                    safe_divide(
+                        original_width,
+                        reference_character_count,
+                    )
+                ),
+                "uncapped_pixels_per_char": (
+                    safe_divide(
+                        uncapped_resized_width,
+                        reference_character_count,
+                    )
+                ),
+                "processed_pixels_per_char": (
+                    safe_divide(
+                        processed_width,
+                        reference_character_count,
+                    )
+                ),
+                "adjacent_repeated_characters": (
+                    adjacent_repeats
+                ),
+                "minimum_ctc_steps": (
+                    minimum_ctc_steps
+                ),
+                "model_time_steps": (
+                    model_time_steps
+                ),
+                "time_steps_per_char": (
+                    safe_divide(
+                        model_time_steps,
+                        reference_character_count,
+                    )
+                ),
+                "ctc_margin": ctc_margin,
+                "ctc_infeasible": (
+                    ctc_margin < 0
+                ),
+            }
+        )
+
+        rows.append(output_row)
+
+        if (
+            row_number % 500 == 0
+            or row_number == total_rows
+        ):
+            print(
+                f"Measured "
+                f"{row_number:,}/"
+                f"{total_rows:,}"
+            )
+
+    measured = pd.DataFrame(rows)
+
+    if measured.empty:
+        raise RuntimeError(
+            "No images could be opened. "
+            "Check image_path values in "
+            "analysis_rows.csv."
+        )
+
+    if missing_rows:
+        pd.DataFrame(
+            missing_rows
+        ).to_csv(
+            output_directory
+            / "missing_or_unreadable_images.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+
+    measured["cap_status"] = (
+        measured[
+            "was_capped"
+        ].astype(str)
+    )
+
+    measured[
+        "pixels_per_char_bucket"
+    ] = pd.cut(
+        measured[
+            "processed_pixels_per_char"
+        ],
+        bins=[
+            -math.inf,
+            8,
+            12,
+            16,
+            24,
+            32,
+            48,
+            math.inf,
+        ],
+        labels=[
+            "<=8",
+            "8-12",
+            "12-16",
+            "16-24",
+            "24-32",
+            "32-48",
+            "48+",
+        ],
+        include_lowest=True,
+    ).astype(str)
+
+    measured[
+        "compression_bucket"
+    ] = pd.cut(
+        measured[
+            "horizontal_compression_percent"
+        ],
+        bins=[
+            -0.001,
+            0,
+            10,
+            25,
+            40,
+            60,
+            math.inf,
+        ],
+        labels=[
+            "none",
+            "0-10%",
+            "10-25%",
+            "25-40%",
+            "40-60%",
+            "60%+",
+        ],
+        include_lowest=True,
+    ).astype(str)
+
+    measured[
+        "ctc_margin_bucket"
+    ] = pd.cut(
+        measured["ctc_margin"],
+        bins=[
+            -math.inf,
+            -1,
+            9,
+            24,
+            49,
+            99,
+            math.inf,
+        ],
+        labels=[
+            "infeasible",
+            "0-9",
+            "10-24",
+            "25-49",
+            "50-99",
+            "100+",
+        ],
+        include_lowest=True,
+    ).astype(str)
+
+    cap_metrics = grouped_metrics(
+        measured,
+        "cap_status",
+    )
+
+    dataset_metrics = grouped_metrics(
+        measured,
+        "dataset",
+    )
+
+    language_metrics = grouped_metrics(
+        measured,
+        "language",
+    )
+
+    ppc_metrics = grouped_metrics(
+        measured,
+        "pixels_per_char_bucket",
+    )
+
+    compression_metrics = grouped_metrics(
+        measured,
+        "compression_bucket",
+    )
+
+    ctc_margin_metrics = grouped_metrics(
+        measured,
+        "ctc_margin_bucket",
+    )
+
+    measured.to_csv(
+        output_directory
+        / "width_analysis_rows.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    cap_metrics.to_csv(
+        output_directory
+        / "metrics_by_cap_status.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    dataset_metrics.to_csv(
+        output_directory
+        / "metrics_by_dataset.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    language_metrics.to_csv(
+        output_directory
+        / "metrics_by_language.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    ppc_metrics.to_csv(
+        output_directory
+        / "metrics_by_pixels_per_character.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    compression_metrics.to_csv(
+        output_directory
+        / "metrics_by_compression.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    ctc_margin_metrics.to_csv(
+        output_directory
+        / "metrics_by_ctc_margin.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    correlations = {
+        (
+            "processed_pixels_per_char_"
+            "vs_best_cer_spearman"
+        ): float(
+            measured[
+                "processed_pixels_per_char"
+            ].corr(
+                measured["best_cer"],
+                method="spearman",
+            )
+        ),
+        (
+            "processed_pixels_per_char_"
+            "vs_best_wer_spearman"
+        ): float(
+            measured[
+                "processed_pixels_per_char"
+            ].corr(
+                measured["best_wer"],
+                method="spearman",
+            )
+        ),
+        (
+            "horizontal_compression_"
+            "vs_best_cer_spearman"
+        ): float(
+            measured[
+                "horizontal_compression_percent"
+            ].corr(
+                measured["best_cer"],
+                method="spearman",
+            )
+        ),
+        (
+            "horizontal_compression_"
+            "vs_best_wer_spearman"
+        ): float(
+            measured[
+                "horizontal_compression_percent"
+            ].corr(
+                measured["best_wer"],
+                method="spearman",
+            )
+        ),
+    }
+
+    if measured["was_capped"].any():
+        mean_capped_compression = float(
+            measured.loc[
+                measured["was_capped"],
+                "horizontal_compression_percent",
+            ].mean()
+        )
+    else:
+        mean_capped_compression = 0.0
+
+    summary = {
+        "source_analysis_csv": str(
+            analysis_path
+        ),
+        "measured_images": int(
+            len(measured)
+        ),
+        "missing_or_unreadable_images": int(
+            len(missing_rows)
+        ),
+        "image_height": (
+            args.image_height
+        ),
+        "max_image_width": (
+            args.max_image_width
+        ),
+        "width_reduction_factor": (
+            args.width_reduction_factor
+        ),
+        "capped_images": int(
+            measured[
+                "was_capped"
+            ].sum()
+        ),
+        "capped_percent": float(
+            measured[
+                "was_capped"
+            ].mean()
+            * 100
+        ),
+        (
+            "mean_horizontal_compression_"
+            "percent_among_capped"
+        ): mean_capped_compression,
+        "ctc_infeasible_images": int(
+            measured[
+                "ctc_infeasible"
+            ].sum()
+        ),
+        "ctc_margin_below_10_images": int(
+            (
+                measured[
+                    "ctc_margin"
+                ]
+                < 10
+            ).sum()
+        ),
+        "correlations": correlations,
+    }
+
+    (
+        output_directory
+        / "width_analysis_summary.json"
+    ).write_text(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    create_plots(
+        dataframe=measured,
+        output_directory=output_directory,
+        cap_metrics=cap_metrics,
+        dataset_metrics=dataset_metrics,
+        ppc_metrics=ppc_metrics,
+    )
+
+    print()
+    print("Width summary:")
+
+    print(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    print()
+    print("Capped versus uncapped:")
+
+    print(
+        cap_metrics[
+            [
+                "cap_status",
+                "count",
+                "capped_percent",
+                "cer",
+                "wer",
+                "exact_accuracy",
+                (
+                    "mean_processed_"
+                    "pixels_per_char"
+                ),
+                "ctc_infeasible_count",
+            ]
+        ].to_string(index=False)
+    )
+
+    print()
+    print("By dataset:")
+
+    print(
+        dataset_metrics[
+            [
+                "dataset",
+                "count",
+                "capped_percent",
+                "cer",
+                "wer",
+                "exact_accuracy",
+                (
+                    "mean_processed_"
+                    "pixels_per_char"
+                ),
+            ]
+        ]
+        .sort_values(
+            "wer",
+            ascending=False,
+        )
+        .to_string(index=False)
+    )
+
+    print()
+    print(
+        f"Saved analysis to: "
+        f"{output_directory}"
+    )
+
+
+if __name__ == "__main__":
+    main()

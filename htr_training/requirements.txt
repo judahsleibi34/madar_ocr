@@ -1,14 +1,15 @@
-# Core deep learning
+﻿# Core deep learning
 torch
 torchvision
 
-# Hugging Face
-transformers
+# Hugging Face and TrOCR
+transformers==4.56.2
 datasets
-accelerate
+accelerate>=1.4,<2
 evaluate
 huggingface-hub
 hf-xet
+safetensors>=0.4.5
 pyarrow
 
 # OCR evaluation and text handling
@@ -17,14 +18,17 @@ python-bidi
 
 # Image and data processing
 Pillow
+opencv-python
 pandas
 numpy
 scikit-learn
 
-# Visualization and progress
-matplotlib
-tqdm
-
-# Dataset downloads and Kaggle integration
+# Networking and dataset downloads
+requests
 kaggle
 gdown
+
+# Visualization, logging, and progress
+matplotlib
+tensorboard
+tqdm
